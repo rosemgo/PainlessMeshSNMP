@@ -1,0 +1,2 @@
+#udev rule for symlink and cleaning up settings
+SUBSYSTEMS=="usb-serial", DRIVERS=="ch341-uart", SYMLINK+="sniffer", RUN+="/usr/bin/stty -F /dev/%k 115200 sane"
