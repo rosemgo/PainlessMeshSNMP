@@ -1,0 +1,135 @@
+#in debian per avere accesso root fare:
+su -
+
+#da installare agent snmpd, guardare la guida https://www.raffaelechiatto.com/installazione-e-configurazione-dellagent-snmp-in-ubuntu-server-16-04/
+sudo apt-get update
+apt-get install snmpd snmp
+
+#regola per definire la porta seriale a cui è collegato il nodo che sniffa
+#accedere al terminale e dare il comando su, poi inserire la password e da utente root eseguire il comando echo >  per creare il file
+#in /etc/udev/rules.d/99-sniffer.rules  (OPZIONALE)
+    SUBSYSTEMS=="usb-serial", DRIVERS=="ch341-uart", SYMLINK+="sniffer", RUN+="/usr/bin/stty -F /dev/%k 115200 sane"
+ 
+#modificare il file /etc/snmp/snmpd.conf che definisce l'agente. E' un file di sola lettura, quindi per modificarlo usare vim da terminale: sudo vim /etc/snmp/snmpd.conf
+
+#qui è spiegato l'uso del extend http://net-snmp.sourceforge.net/wiki/index.php/Tut:Extending_snmpd_using_shell_scripts #External_examples
+
+#con test 1 e test 2 sto associando un oid al dato letto dal primo nodo sensore ed un altro oid al dato letto dal secondo sensore, e questo secondo me è sbagliato perchè l'oid deve essere associato al parametro stringa.
+#in /etc/snmp/snmpd.conf #/dev/sniffer va cambiato con /dev/ttyUSB0 se non definisco la regola di sopra 99-sniffer.rules
+    agentAddress udp:161 #l'agente accetta connessioni in ingresso da tutti gli indirizzi ip che inviano richieste sulla porta 161
+    rocommunity testing #ro read only
+    extend-sh test1 /bin/cat /dev/sniffer | grep --line-buffered -m1 3044747769 #grep cerca in un testo la stringa passata. grep stampa solo la prima riga che contiene 3044747769 (id identificativo del nodo). quindi se questo sensore non manda nessun messaggio, grep non stampa niente 
+    extend-sh test2 /bin/cat /dev/sniffer | grep --line-buffered -m1 97835706  #grep stampa solo la prima riga che contiene 97835706 (id identificativo del nodo). quindi se questo sensore non manda nessun messaggio, grep non stampa niente
+    
+NB
+#serve per definire l'agente, il quale esegue l'azione di lettura da seriale (cat) ed head -n1 che significa leggi "fermati alla prima linea" quando riceve una richiesta snmpwalk o snmpget con il oid indicato da test1 o test2 se voglo usare 2 oid
+#test1 è una stringa che rappresenta l'oid associato al dato letto da seriale. Quindi quando viene fatta una richiesta get con l'oid rappresentato dal test, l'agente legge da seriale fermandosi alla prima riga letta (head -n1, n1 significa fino alla fine della riga 1), quindi la prima stringa che becca la stampa. Può essere il dato prodotto da qualunque dispositivo. Con il comando grep sarebbe diverso, perche grep v a cercare solo il testo che contiene la stringa identificativa indicata accanto a grep
+#a me funziona così
+#in /etc/snmp/snmpd.conf       
+    agentAddress udp:161 #l'agent si mette in ascolto su tutte le interfacce della macchina locale
+    rocommunity testing
+    extend-sh test1 /bin/cat /dev/sniffer | head -n1 #/dev/sniffer va cambiato con /dev/ttyUSB0 o con USB1 se non definisco la regola di sopra 99-sniffer.rules
+#ovviamente usando solo un oid (test1) il comando get rispondera solo a quel oid
+
+#shell
+#For example, /dev/ttyS0 is owned by (è di proprietà di) the user root and the group dialout, so to be able to acesss the serial device, I would add myself to the dialout group:
+#usermod -a -G dialout MY_USER_NAME
+sudo usermod -a -G dialout Debian-snmp (Debian-snmp è l'utente agente snmp, visibile con il comando sudo service snmpd status)
+
+NB PASSAGGIO IMPORTANTISSIMO DA ESEGUIRE OGNI VOLTA
+#baud setup serve per settare lo speed della porta seriale
+sudo stty -F /dev/sniffer 115200 sane #sostituire /dev/sniffer con /dev/ttyUSB0 #sane effettua un reset dei parametri dell'interfaccia prima di setare il bound rate a 115200
+#per verificare i settaggi attuali della porta usare il comando:
+sudo stty -F /dev/ttyUSB0 -a sostituire USB0 con USB1 se il dispositivo è connesso alla porta USB1
+
+
+#test lettura da seriale mentre la schedina collegata al seriale usb sniffa
+sudo cat /dev/ttyUSB0 se non funziona con USB0 provare USB1 #il cat prende tutto da seriale e mostra nel terminale, serve per capire se linux legge i dati da seriale: in pratica fa la stessa cosa del monitor di arduino
+usare il comando dmesg per vedere le porte USB viste dal sistema
+
+
+#Fatto questo riavviamo il servizio SNMP con il comando
+sudo service snmpd restart
+#Se non riceviamo nessun errore lanciare il comando seguente per veriicare lo stato del demone SNMP:
+sudo service snmpd status
+
+
+#test
+grep --line-buffered -m1 3044747769
+grep --line-buffered -m1 97835706
+
+snmpwalk -v1 -c testing 127.0.0.1 1.3.6.1.......... #127.0.0.1 sarebbe localhost, da cambiare con l'indirizzo della macchina su cui c'è l'agente.
+						    #1.3.6.1.......... indica l'oid da cercare. con walk parte da quell'oid ed esplora l'albero finoa trovare l'oid corrispondente alle stringhe inviate dallo sniffer
+						    #1.3.6.1.......... sostituire con uno degli gli oid presenti sotto:
+
+snmpget -v1 -c testing localhost 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49 #cambiare localhost con l'ip della macchina dove risiede l'agente
+
+snmpwalk -v1 -c testing localhost 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116
+
+snmpwalk -v1 -c testing localhost 1.3.6.1.4.1.8072.1.3.2 #per testare tutto l'albero e vedere tutti gli OID presenti
+
+per scrivere in un file basta usare >> nomefile.txt
+esempio: snmpget -v1 -c testing localhost 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49 >> monitoring.txt
+
+#snmptranslate consente di conoscere l'OID di una stringa
+sudo snmptranslate test 
+
+sudo snmptranslate .1.3.6.1.2.1.1.3.0
+
+
+
+# OID di interesse
+# test root tree + commands:
+# 1.3.6.1.4.1.8072.1.3.2
+# test out tree:
+# 1.3.6.1.4.1.8072.1.3.2.4
+# test trees:
+# 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116
+# 1.3.6.1.4.1.8072.1.3.2.3.1.2.5.116.101.115.116
+# 1.3.6.1.4.1.8072.1.3.2.4.1.2.5.116.101.115.116
+# test1:
+# 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49
+# 1.3.6.1.4.1.8072.1.3.2.3.1.2.5.116.101.115.116.49
+# 1.3.6.1.4.1.8072.1.3.2.4.1.2.5.116.101.115.116.49.1
+# test2:
+# 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.50
+# 1.3.6.1.4.1.8072.1.3.2.3.1.2.5.116.101.115.116.50
+# 1.3.6.1.4.1.8072.1.3.2.4.1.2.5.116.101.115.116.50.1
+
+Per installare SNMP su windows ed inviare richeste get anche da windows seguire la guida https://community.sysaid.com/Sysforums/posts/list/2287.page
+scaricare l'eseguibile, installare  e poi da cmd windows è sufficiente dare lo stesso comando
+snmpget -v1 -c testing 192.168.204.128(indirizzo ip dell'agente) 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49
+
+
+Per lanciare un demono trapd che stia in attesa di trap, installare:
+sudo apt-get install snmptrapd
+
+poi lanciare il comando:
+sudo snmptrapd -f -Oq -Lo -Lf /root/out/messages.log
+
+E' necessario prima lanciare il file python che legge da seriale ed invia la trap, poi lato server (può essere la macchina virtuale a anche windows) lanciamo il comando snmptrapd
+
+Per abilitare la ricezione di ping in ingresso sulla macchina virtuale è necessario eseguire questo comando in windows, aprendo cmd con i diritti di amministratore:
+C:\Windows\system32>netsh interface set interface name="VMware Network Adapter VMnet8" admin=ENABLED
+
+poi abilitare in VMWare la modalità di connessione Bridge
+
+
+
+
+
+COMANDI RAPIDI
+
+sudo nano /etc/udev/rules.d/99-sniffer.rules
+sudo nano /etc/snmp/snmpd.conf
+
+sudo stty -F /dev/sniffer 115200 sane
+sudo stty -F /dev/sniffer -a
+
+sudo service snmpd restart
+sudo service snmpd status
+
+snmpget -v1 -c testing localhost 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49
+snmpget -v1 -c testing 192.168.180.208 1.3.6.1.4.1.8072.1.3.2.3.1.1.5.116.101.115.116.49
+
+
